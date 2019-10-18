@@ -9,7 +9,6 @@ import argparse
 import os
 import torch
 from functools import partial
-import genotypes as gt
 
 def get_parser(name):
     """ make default formatted parser """

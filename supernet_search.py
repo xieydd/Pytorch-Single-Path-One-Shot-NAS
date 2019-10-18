@@ -20,13 +20,11 @@ from torch.autograd import Variable
 from apex.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 
-from config import SPOSConfig
-from network import get_shufflenas_oneshot 
+from utils.config import SPOSConfig
+from model.network import get_shufflenas_oneshot 
 
-import sys
-sys.path.append("../")
-from imagenet_dataloader import get_imagenet_iter_torch
-import utils
+from utils.imagenet_dataloader import get_imagenet_iter_torch
+from utils import utils
 
 config = SPOSConfig()
 device = torch.device("cuda")
