@@ -7,9 +7,10 @@
 '''
 import torch
 import torch.nn as nn
-from blocks import ShuffleNetBlock, Activation, ShuffleNasBlock, SE, NasHybridSequential 
+from .blocks import ShuffleNetBlock, Activation, ShuffleNasBlock, SE, NasHybridSequential 
 import random
 from sys import maxsize
+import numpy as np
 
 class ShuffleNetV2_OneShot(nn.Module):
     def __init__(self, input_size=224, n_class=1000, architecture=None, channels_scales=None,
@@ -208,7 +209,7 @@ class ShuffleNetV2_OneShot(nn.Module):
 
     def forward(self, x, full_arch, full_scale_mask):
         x = self.first_conv(x)
-        if len(full_arch) == 1:
+        if full_arch is None:
             x = self.features(x)
         else:
             x = self.features(x, full_arch, full_scale_mask)
@@ -294,7 +295,7 @@ def get_shufflenas_oneshot(architecture=None, scale_ids=None, use_all_blocks=Fal
                          "or both not None for fixed structure model.")
     return net
 
-FIX_ARCH = False
+FIX_ARCH = False 
 LAST_CONV_AFTER_POOLING = True
 USE_SE = True
 
@@ -311,13 +312,13 @@ def main():
 
     """ Test customized initialization """
     net._initialize_weights()
+    print(np.sum(np.prod(v.size()) for name, v in net.named_parameters() if "auxiliary" not in name)/1e6) 
     test_data = torch.rand(5, 3, 224, 224)
     block_choices = net.random_block_choices(select_predefined_block=False)
     full_channel_mask, _ = net.random_channel_mask(select_all_channels=False)
     test_outputs = net(test_data, block_choices, full_channel_mask)
     #test_outputs = net(test_data)
     print(test_outputs.size())
-    
 
 
 if __name__ == '__main__':

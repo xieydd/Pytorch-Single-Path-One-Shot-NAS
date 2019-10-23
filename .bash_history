@@ -1,0 +1,46 @@
+cd /root/
+ls
+cd model/
+ls
+vim network.py 
+python network.py 
+vim network.py 
+python network.py 
+vim network.py 
+python network.py 
+vim network.py 
+vim network.py 
+python network.py 
+vim network.py 
+python network.py 
+vim network.py 
+python network.py 
+vim network.py 
+python network.py 
+vim network.py 
+vim network.py 
+vim network.py 
+python network.py 
+python network.py 
+python network.py 
+python network.py 
+python network.py 
+python network.py 
+python network.py 
+python network.py 
+python network.py 
+python network.py 
+python network.py 
+python network.py 
+python network.py 
+python network.py 
+python network.py 
+python network.py 
+python network.py 
+python network.py 
+python network.py 
+python network.py 
+python network.py 
+python network.py 
+python network.py 
+exit

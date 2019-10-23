@@ -141,14 +141,14 @@ class ShuffleNetBlock(nn.Module):
         if self.stride==2:
             x_proj = x
             x_main = x
-            print("strides == 2")
+            print("strides == 2 ShuffleNetBlock")
             print(x_main.shape)
             print((self.branch_proj(x_proj)).shape)
             print((self.branch_main(x_main)).shape)
             return torch.cat((self.branch_proj(x_proj), self.branch_main(x_main)), 1)
         elif self.stride==1:
             x_proj, x_main = self.channel_shuffle_and_split(x)
-            print("stride == 1")
+            print("stride == 1 ShuffleNetBlock")
             print(x_proj.shape)
             print(x_main.shape)
             print((self.branch_main(x_main)).shape)
@@ -204,11 +204,18 @@ class ShuffleNetCSBlock(ShuffleNetBlock):
                                                 act_name=act_name, **kwargs)
 
     def forward(self, x, channel_choice):
+        self.branch_main.cuda()
         if self.stride == 2:
             x_project = x
             x_main = x
+            print("strides == 2 ShuffleNetCSBlock")
+            print("x_main shape", x_main.shape)
+            print("branch_proj shape", (self.branch_proj(x)).shape)
+            print("branch_main shape", (self.branch_main(x_main, channel_choice)).shape)
+            self.branch_proj.cuda()
             return torch.cat((self.branch_proj(x_project), self.branch_main(x_main, channel_choice)), dim=1)
         elif self.stride == 1:
+            print("strides == 1 ShuffleNetCSBlock")
             print(x.shape)
             x_project, x_main = self.channel_shuffle_and_split(x)
             return torch.cat((x_project, self.branch_main(x_main, channel_choice)), dim=1)
@@ -219,11 +226,12 @@ class NasBaseHybridSequential(nn.Module):
         self.blocks = blocks
 
     def forward(self, x, block_channel_mask):
-        print(x.shape)
         for block in self.blocks:
+            print("NasBaseHybridSequential")
             print(block)
             print(x.shape)
             print(block_channel_mask.shape)
+            block.cuda()
             if isinstance(block, ChannelSelector):
                 x = block(x, block_channel_mask)
             else:
@@ -355,8 +363,15 @@ class ChannelSelector(nn.Module):
         self.channel_number = channel_number
 
     def forward(self, x, block_channel_mask, *args, **kwargs):
-        block_channel_mask = block_channel_mask[:self.channel_number]
+        print('ChannelSelector')
+        print(self.channel_number)
+        #indices = torch.LongTensor([0, self.channel_number])
+        #block_channel_mask = torch.index_select(block_channel_mask, -1,indices)
+        block_channel_mask = block_channel_mask.narrow(-1, 0, self.channel_number)
+        print(block_channel_mask.shape)
         block_channel_mask = block_channel_mask.reshape(shape=(1, self.channel_number, 1, 1))
+        device = torch.device('cuda')
+        block_channel_mask = block_channel_mask.to(device)
         x = x * block_channel_mask
         return x
 

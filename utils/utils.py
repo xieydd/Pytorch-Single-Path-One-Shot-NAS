@@ -8,7 +8,6 @@
 import logging
 import numpy as np
 import torchvision.datasets as dset
-import preproc
 import os
 import torch
 import shutil

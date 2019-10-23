@@ -198,7 +198,7 @@ def train(train_queue, valid_queue, model, criterion, optimizer, lr,epoch, write
           full_channel_mask, _ = model.module.random_channel_mask(select_all_channels=config.use_all_channels)
       logits = model(input,block_choices, full_channel_mask)
     else:
-      logits = model(input, [0], [0])
+      logits = model(input, None, None)
     loss = criterion(logits,target)
     loss.backward()
     nn.utils.clip_grad_norm(model.parameters(), config.w_grad_clip)
