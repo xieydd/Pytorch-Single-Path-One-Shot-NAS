@@ -85,7 +85,7 @@ class SPOSConfig(BaseConfig):
         parser.add_argument('--label-smoothing', action='store_true',
                         help='use label smoothing or not in training. default is false.')
         parser.add_argument('--label_smooth', type=float, default=0.1, help='label smoothing')
-        parser.add_argument('--use-se', action='store_true',
+        parser.add_argument('--use_se', action='store_true',
                         help='use SE layers or not in resnext and ShuffleNas. default is false.')
         parser.add_argument('--epoch-start-cs', type=int, default=224,
                         help='Epoch id for starting Channel selection.')
@@ -95,9 +95,16 @@ class SPOSConfig(BaseConfig):
                             help='whether to use all the channels.')
         parser.add_argument('--last-conv-after-pooling', action='store_true',
                             help='Whether to follow MobileNet V3 last conv after pooling style.')
+        parser.add_argument('--warmup-epochs', type=int, default=0,
+                        help='number of warmup epochs.')
         parser.add_argument('--cs-warm-up', action='store_true',
                         help='Whether to do warm up for Channel Selection so that gradually selects '
                              'larger range of channels')
+        parser.add_argument('--channels-layout', type=str, default='OneShot',
+                        help='The mode of channels layout: [\'ShuffleNetV2+\', \'OneShot\']')
+        parser.add_argument('--reduced-dataset-scale', type=int, default=1,
+                        help='How many times the dataset would be reduced, so that in each epoch '
+                             'only num_batches / reduced_dataset_scale batches will be trained.')
         return parser
 
     def __init__(self):

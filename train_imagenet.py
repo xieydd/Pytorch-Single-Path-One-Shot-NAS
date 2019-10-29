@@ -59,17 +59,19 @@ def main():
   model_name = config.arch
 
   if config.epoch_start_cs != -1:
-    config.use_all_channel = True
+    config.use_all_channels = True
   
    ### Model
   if model_name == 'ShuffleNas_fixArch':
     architecture = [0, 0, 3, 1, 1, 1, 0, 0, 2, 0, 2, 1, 1, 0, 2, 0, 2, 1, 3, 2]
     scale_ids = [6, 5, 3, 5, 2, 6, 3, 4, 2, 5, 7, 5, 4, 6, 7, 4, 4, 5, 4, 3]
-    model = get_shufflenas_oneshot(architecture, scale_ids, use_se=config.use_se,
-                                  last_conv_after_pooling=config.last_conv_after_pooling)
+    model = get_shufflenas_oneshot(architecture, scale_ids, use_se=config.use_se, n_class=CLASSES,
+                                  last_conv_after_pooling=config.last_conv_after_pooling,
+                                  channels_layout=config.channels_layout)
   elif model_name == 'ShuffleNas':
-    model = get_shufflenas_oneshot(use_all_blocks=config.use_all_blocks, use_se=config.use_se,
-                                     last_conv_after_pooling=config.last_conv_after_pooling)
+    model = get_shufflenas_oneshot(use_all_blocks=config.use_all_blocks, use_se=config.use_se, n_class=CLASSES,
+                                     last_conv_after_pooling=config.last_conv_after_pooling,
+                                     channels_layout=config.channels_layout)
   else:
     raise NotImplementedError
   
@@ -78,8 +80,10 @@ def main():
   #model = DDP(model, delay_allreduce=True)
   # For solve the custome loss can`t use model.parameters() in apex warpped model via https://github.com/NVIDIA/apex/issues/457 and https://github.com/NVIDIA/apex/issues/107 
   model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.local_rank],output_device=config.local_rank)
-  logger.info("param size = %fMB", utils.count_parameters_in_MB(model))
-  
+  if model_name == 'ShuffleNas_fixArch':
+    logger.info("param size = %fMB", utils.count_parameters_in_MB(model))
+  else:
+    logger.info("Train Supernet") 
   # Loss
   if config.label_smoothing:
     criterion = CrossEntropyLabelSmooth(CLASSES, config.label_smooth)
@@ -93,9 +97,8 @@ def main():
       config.w_lr,
       momentum=config.w_momentum,
       weight_decay=config.w_weight_decay)
-      
-  w_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        w_optimizer, float(config.epochs), eta_min=config.w_lr_min)
+
+  w_schedule = utils.Schedule(w_optimizer)
         
   train_data = get_imagenet_iter_torch(
                 type='train',
@@ -122,10 +125,16 @@ def main():
 
   best_top1 = 0.
   for epoch in range(config.epochs):
-    w_scheduler.step()
-    lr = w_scheduler.get_lr()[0]
+    if epoch < config.warmup_epochs:
+      lr = w_schedule.update_schedule_linear(epoch, config.w_lr, config.w_weight_decay, config.batch_size)
+    else:
+      w_scheduler =  w_schedule.get_schedule_cosine(config.w_lr_min, config.epochs)
+      w_scheduler.step()
+      lr = w_scheduler.get_lr()[0]
     logger.info('epoch %d lr %e', epoch, lr)
 
+    if epoch > config.epoch_start_cs:
+      config.use_all_channels = False 
     # training
     train_top1, train_loss = train(train_data, valid_data, model, criterion, w_optimizer, lr,epoch, writer, model_name)
     logger.info('Train top1 %f', train_top1)
@@ -133,7 +142,7 @@ def main():
     # validation
     top1 = 0
     if epoch%10 == 0:
-      top1, loss = infer(valid_data, model,epoch, criterion,writer)
+      top1, loss = infer(valid_data, model,epoch, criterion,writer, model_name)
       logger.info('valid top1 %f', top1)
     
     # save
@@ -192,8 +201,9 @@ def train(train_queue, valid_queue, model, criterion, optimizer, lr,epoch, write
     if model_name == "ShuffleNas":
       block_choices = model.module.random_block_choices(select_predefined_block=False)
       if config.cs_warm_up:
+          ignore_first_two_cs = True
           full_channel_mask, _ = model.module.random_channel_mask(select_all_channels=config.use_all_channels,
-                                                          epoch_after_cs=epoch - config.epoch_start_cs)
+                                                          epoch_after_cs=epoch - config.epoch_start_cs, ignore_first_two_cs=ignore_first_two_cs)
       else:
           full_channel_mask, _ = model.module.random_channel_mask(select_all_channels=config.use_all_channels)
       logits = model(input,block_choices, full_channel_mask)
@@ -202,7 +212,16 @@ def train(train_queue, valid_queue, model, criterion, optimizer, lr,epoch, write
     loss = criterion(logits,target)
     loss.backward()
     nn.utils.clip_grad_norm(model.parameters(), config.w_grad_clip)
-    optimizer.step()
+    if model_name == "ShuffleNas":
+      weight = model.parameters()
+      optimizer = torch.optim.SGD(
+        weight,
+        config.w_lr,
+        momentum=config.w_momentum,
+        weight_decay=config.w_weight_decay)
+      optimizer.step()
+    else:
+      optimizer.step()
 
     acc1, acc5 = utils.accuracy(logits, target, topk=(1, 5))
     reduced_loss = reduce_tensor(loss.data, world_size=config.world_size)
@@ -227,7 +246,7 @@ def train(train_queue, valid_queue, model, criterion, optimizer, lr,epoch, write
   return top1.avg, losses.avg
   
 
-def infer(valid_queue, model, epoch,criterion, writer):
+def infer(valid_queue, model, epoch,criterion, writer, model_name):
   batch_time = utils.AverageMeters('Time', ':6.3f')
   losses = utils.AverageMeters('Loss', ':.4e')
   top1 = utils.AverageMeters('Acc@1', ':6.2f')
@@ -245,7 +264,17 @@ def infer(valid_queue, model, epoch,criterion, writer):
     input = Variable(input, volatile=True).cuda()
     #target = Variable(target, volatile=True).cuda(async=True)
     target = Variable(target, volatile=True).cuda()
-    logits = model(input)
+    if model_name == "ShuffleNas":
+      block_choices = model.module.random_block_choices(select_predefined_block=False)
+      ignore_first_two_cs = True  # 0.2 and 0.4 scales are ignored
+      if config.cs_warm_up:
+          full_channel_mask, _ = model.module.random_channel_mask(select_all_channels=config.use_all_channels,
+                                                          epoch_after_cs=epoch - config.epoch_start_cs, ignore_first_two_cs=ignore_first_two_cs)
+      else:
+          full_channel_mask, _ = model.module.random_channel_mask(select_all_channels=config.use_all_channels)
+      logits = model(input,block_choices, full_channel_mask)
+    else:
+      logits = model(input, None, None)
     loss = criterion(logits, target)
     acc1, acc5 = utils.accuracy(logits, target, topk=(1, 5))
     n = input.size(0)

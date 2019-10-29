@@ -11,10 +11,34 @@ import torch.nn.functional as F
 import numpy as np
 import random
 
+class ShuffleChannels(nn.Module):
+    def __init__(self, mid_channel,groups=2, **kwargs):
+        super(ShuffleChannels, self).__init__()
+        # For ShuffleNet v2, groups is always set 2
+        assert groups == 2
+        self.groups = groups
+        self.mid_channel = mid_channel
+
+    def forward(self, x):
+        batchsize, num_channels, height, width = x.data.size()
+        assert (num_channels % 4 == 0)
+        x = x.reshape(batchsize * num_channels // self.groups, self.groups, height * width)
+        x = x.permute(1, 0, 2)
+        x = x.reshape(self.groups, -1, num_channels // self.groups, height, width)
+        return x[0], x[1]
+
+class GlobalAvgPool2d(nn.Module):
+    def __init__(self):
+        """Global average pooling over the input's spatial dimensions"""
+        super(GlobalAvgPool2d, self).__init__()
+
+    def forward(self, inputs):
+        return F.adaptive_avg_pool2d(inputs, 1).view(inputs.size(0), -1)
+
 
 class ShuffleNetBlock(nn.Module):
 
-    def __init__(self, inp, oup, mid_channels, ksize, stride, block_mode='ShuffleNetV2', use_se=False, fix_arch=True, act_name='relu'):
+    def __init__(self, inp, oup, mid_channels, ksize, stride, block_mode='ShuffleNetV2', use_se=False, fix_arch=True, act_name='relu', shuffle_method=ShuffleChannels):
         super(ShuffleNetBlock, self).__init__()
         self.stride = stride
         assert stride in [1, 2]
@@ -51,7 +75,7 @@ class ShuffleNetBlock(nn.Module):
 
         Since scale ~ (0, 2), this is guaranteed: main mid channel < final output channel
         """
-        self.channel_shuffle_and_split = ShuffleChannels(groups=2)
+        self.channel_shuffle_and_split = shuffle_method(mid_channel=inp, groups=2)
         if block_mode == 'ShuffleNetV2':
             branch_main = [
                 # pw
@@ -141,17 +165,17 @@ class ShuffleNetBlock(nn.Module):
         if self.stride==2:
             x_proj = x
             x_main = x
-            print("strides == 2 ShuffleNetBlock")
-            print(x_main.shape)
-            print((self.branch_proj(x_proj)).shape)
-            print((self.branch_main(x_main)).shape)
+            # print("strides == 2 ShuffleNetBlock")
+            # print(x_main.shape)
+            # print((self.branch_proj(x_proj)).shape)
+            # print((self.branch_main(x_main)).shape)
             return torch.cat((self.branch_proj(x_proj), self.branch_main(x_main)), 1)
         elif self.stride==1:
             x_proj, x_main = self.channel_shuffle_and_split(x)
-            print("stride == 1 ShuffleNetBlock")
-            print(x_proj.shape)
-            print(x_main.shape)
-            print((self.branch_main(x_main)).shape)
+            # print("stride == 1 ShuffleNetBlock")
+            # print(x_proj.shape)
+            # print(x_main.shape)
+            # print((self.branch_main(x_main)).shape)
             return torch.cat((x_proj, self.branch_main(x_main)), 1)
 
 class ShuffleNasBlock(nn.Module):
@@ -204,19 +228,19 @@ class ShuffleNetCSBlock(ShuffleNetBlock):
                                                 act_name=act_name, **kwargs)
 
     def forward(self, x, channel_choice):
-        self.branch_main.cuda()
+        #self.branch_main.cuda()
         if self.stride == 2:
             x_project = x
             x_main = x
-            print("strides == 2 ShuffleNetCSBlock")
-            print("x_main shape", x_main.shape)
-            print("branch_proj shape", (self.branch_proj(x)).shape)
-            print("branch_main shape", (self.branch_main(x_main, channel_choice)).shape)
-            self.branch_proj.cuda()
+            #print("strides == 2 ShuffleNetCSBlock")
+            #print("x_main shape", x_main.shape)
+            #print("branch_proj shape", (self.branch_proj(x)).shape)
+            #print("branch_main shape", (self.branch_main(x_main, channel_choice)).shape)
+            #self.branch_proj.cuda()
             return torch.cat((self.branch_proj(x_project), self.branch_main(x_main, channel_choice)), dim=1)
         elif self.stride == 1:
-            print("strides == 1 ShuffleNetCSBlock")
-            print(x.shape)
+            #print("strides == 1 ShuffleNetCSBlock")
+            #print(x.shape)
             x_project, x_main = self.channel_shuffle_and_split(x)
             return torch.cat((x_project, self.branch_main(x_main, channel_choice)), dim=1)
 
@@ -227,31 +251,75 @@ class NasBaseHybridSequential(nn.Module):
 
     def forward(self, x, block_channel_mask):
         for block in self.blocks:
-            print("NasBaseHybridSequential")
-            print(block)
-            print(x.shape)
-            print(block_channel_mask.shape)
-            block.cuda()
+            #print("NasBaseHybridSequential")
+            #print(block)
+            #print(x.shape)
+            #print(block_channel_mask.shape)
+            #block.cuda()
             if isinstance(block, ChannelSelector):
                 x = block(x, block_channel_mask)
             else:
                 x = block(x)
         return x
 
-class ShuffleChannels(nn.Module):
-    def __init__(self, groups=2, **kwargs):
-        super(ShuffleChannels, self).__init__()
+# class ShuffleChannels(nn.Module):
+#     def __init__(self, mid_channel,groups=2, **kwargs):
+#         super(ShuffleChannels, self).__init__()
+#         # For ShuffleNet v2, groups is always set 2
+#         assert groups == 2
+#         self.groups = groups
+#         self.mid_channel = mid_channel
+
+#     def forward(self, x):
+#         batchsize, num_channels, height, width = x.data.size()
+#         assert (num_channels % 4 == 0)
+#         x = x.reshape(batchsize * num_channels // self.groups, self.groups, height * width)
+#         x = x.permute(1, 0, 2)
+#         x = x.reshape(self.groups, -1, num_channels // self.groups, height, width)
+#         return x[0], x[1]
+
+
+
+
+class ShuffleChannelsConv(nn.Module):
+    """
+    ShuffleNet channel shuffle Block.
+    """
+    def __init__(self, mid_channel, groups=2, **kwargs):
+        super(ShuffleChannelsConv, self).__init__()
         # For ShuffleNet v2, groups is always set 2
         assert groups == 2
         self.groups = groups
+        self.mid_channel = int(mid_channel)
+        self.channels = int(mid_channel * 2)
+        self.transpose_conv = nn.Conv2d(self.channels, self.channels, 1, 1,padding=0, bias=False)
+
+    # def transpose_init(self):
+    #     for i, param in enumerate(self.transpose_conv.collect_params().values()):
+    #         if i > 0:
+    #             raise ValueError('Transpose conv should only have the weights parameter.')
+    #         param.set_data(self.generate_transpose_conv_kernel())
+    #         param.grad_req = 'null'
+
+    # def generate_transpose_conv_kernel(self):
+    #     c = self.channels
+    #     if c % 2 != 0:
+    #         raise ValueError('Channel number should be even.')
+    #     idx = np.zeros(c)
+    #     idx[np.arange(0, c, 2)] = np.arange(c / 2)
+    #     idx[np.arange(1, c, 2)] = np.arange(c / 2, c, 1)
+    #     weights = np.zeros((c, c))
+    #     weights[np.arange(c), idx.astype(int)] = 1.0
+    #     print(weights)
+    #     return nd.expand_dims(nd.expand_dims(nd.array(weights), axis=2), axis=3)
 
     def forward(self, x):
-        batchsize, num_channels, height, width = x.data.size()
-        assert (num_channels % 4 == 0)
-        x = x.reshape(batchsize * num_channels // 2, 2, height * width)
-        x = x.permute(1, 0, 2)
-        x = x.reshape(2, -1, num_channels // 2, height, width)
-        return x[0], x[1]
+        data = self.transpose_conv(x)
+        data_project = data.narrow(1,0,self.mid_channel)
+        #print(self.mid_channel)
+        data_x = data.narrow(1,self.mid_channel,data.shape[1] - self.mid_channel)
+        return data_project, data_x
+
 
 class Swish(nn.Module):
     """
@@ -363,15 +431,13 @@ class ChannelSelector(nn.Module):
         self.channel_number = channel_number
 
     def forward(self, x, block_channel_mask, *args, **kwargs):
-        print('ChannelSelector')
-        print(self.channel_number)
         #indices = torch.LongTensor([0, self.channel_number])
         #block_channel_mask = torch.index_select(block_channel_mask, -1,indices)
-        block_channel_mask = block_channel_mask.narrow(-1, 0, self.channel_number)
-        print(block_channel_mask.shape)
+        block_channel_mask = block_channel_mask.narrow(1, 0,self.channel_number)
+        #print(block_channel_mask.shape)
         block_channel_mask = block_channel_mask.reshape(shape=(1, self.channel_number, 1, 1))
         device = torch.device('cuda')
-        block_channel_mask = block_channel_mask.to(device)
+        #block_channel_mask = block_channel_mask.to(device)
         x = x * block_channel_mask
         return x
 
@@ -565,25 +631,36 @@ def main():
     channel_selector = ChannelSelector(channel_number=block_final_output_channel)
     for i in range(4):
         global_channel_mask = random_channel_mask(stage_out_channels=[8, 160, 320, 640])
-        indices = torch.LongTensor([i])
-        local_channel_mask = torch.index_select(global_channel_mask, 1, indices)
+        #indices = torch.LongTensor([i])
+        #local_channel_mask = torch.index_select(global_channel_mask, 1, indices)
+        local_channel_mask = global_channel_mask[i:i+1]
         #local_channel_mask = nd.slice(global_channel_mask, begin=(i, None), end=(i + 1, None))
         selected_tensor = channel_selector(tensor, local_channel_mask)
         print(selected_tensor.shape)
     print("Finished testing ChannelSelector\n")
 
     """ Test BN with inference statistic update """
-    bn = NasBatchNorm(inference_update_stat=True, in_channels=4)
-    bn.running_mean.set_data(bn.running_mean.data() + 1)
-    mean, std = 5, 2
-    for i in range(100):
-        dummy = torch.normal(mean, std, shape=(10, 4, 5, 5))
-        rst = bn(dummy)
-        # print(dummy)
-        # print(rst)
-    print("Defined mean: {}, running mean: {}".format(mean, bn.running_mean.data()))
-    print("Defined std: {}, running var: {}".format(std, bn.running_var.data()))
-    print("Finished testing NasBatchNorm\n")
+    # bn = NasBatchNorm(inference_update_stat=True, in_channels=4)
+    
+    # mean, std = 5, 2
+    # for i in range(100):
+    #     dummy = torch.normal(torch.Tensor(mean), torch.Tensor(std), out=torch.Tensor([10, 4, 5, 5]))
+    #     rst = bn(dummy)
+    #     # print(dummy)
+    #     # print(rst)
+    # bn.running_mean.set_data(bn.running_mean.data() + 1)
+    # print("Defined mean: {}, running mean: {}".format(mean, bn.running_mean.data()))
+    # print("Defined std: {}, running var: {}".format(std, bn.running_var.data()))
+    # print("Finished testing NasBatchNorm\n")
 
+    dummy = np.ones((1,6,5,5))
+    for i in range(6):
+        dummy[:,i,:,:] = i
+
+    transpose_conv = ShuffleChannelsConv(mid_channel=6/2)
+    data_project, data_x = transpose_conv(torch.Tensor(dummy))
+    print(data_project.shape)
+    print(data_x.shape)
+    
 if __name__ == "__main__":
     main()

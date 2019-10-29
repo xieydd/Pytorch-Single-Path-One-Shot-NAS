@@ -455,3 +455,30 @@ class Cutout(object):
         img *= mask
         return img
 
+# http://www.spytensor.com/index.php/archives/32/
+# https://pytorch.org/docs/stable/_modules/torch/optim/lr_scheduler.html
+class Schedule():
+    def __init__(self, optimizer):
+        self.optimizer = optimizer
+        
+    def update_schedule_linear(self, epoch ,base_lr, lr_decay, batch):
+        lr = base_lr * (lr_decay ** (epoch // batch))
+        self.update_lr(lr)
+        return lr
+
+    def get_schedule_cosine(self, eta_min, max_epochs):
+        return torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, float(max_epochs), eta_min=eta_min)
+    
+    #[0,batch,2*batch,...]
+    def get_schedule_steplr(self, batch, gamma=0.1):
+        return torch.optim.lr_scheduler.StepLR(self.optimizer, batch, gamma)
+
+    # [0, 30,80,100,..] via milestones
+    def get_schedule_multi_steplr(self, optimizer, milestones, gamma=0.1):
+        return torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones, gamma)
+
+    def update_lr(self, lr):
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = lr 
+

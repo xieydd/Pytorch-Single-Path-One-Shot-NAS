@@ -126,7 +126,10 @@ def get_imagenet_iter_torch(type, image_dir, batch_size, num_threads, device_id,
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
         dataset = datasets.ImageFolder(image_dir + '/val', transform)
-        dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_threads,
+        num_train = len(dataset)
+        indices = list(range(num_train))
+        split = int(np.floor(portion * num_train))
+        dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,sampler=torch.utils.data.sampler.SubsetRandomSampler(indices[:split]), shuffle=False, num_workers=num_threads,
                                                  pin_memory=True)
     return dataloader
 
