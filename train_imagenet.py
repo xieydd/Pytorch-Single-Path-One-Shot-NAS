@@ -1,7 +1,7 @@
 '''
-@Description: Train Search Single Path One Shot Nas  
+@Description: Train Search SuperNet Single Path One Shot Nas  
 @Author: xieydd
-@Date: 2019-09-05 15:37:47
+@Date: 2019-10-05 15:37:47
 @LastEditTime: 2019-10-11 18:22:59
 @LastEditors: Please set LastEditors
 '''
@@ -65,6 +65,7 @@ def main():
   if model_name == 'ShuffleNas_fixArch':
     architecture = [0, 0, 3, 1, 1, 1, 0, 0, 2, 0, 2, 1, 1, 0, 2, 0, 2, 1, 3, 2]
     scale_ids = [6, 5, 3, 5, 2, 6, 3, 4, 2, 5, 7, 5, 4, 6, 7, 4, 4, 5, 4, 3]
+    # we rescale the channels uniformly to adjust the FLOPs. 
     model = get_shufflenas_oneshot(architecture, scale_ids, use_se=config.use_se, n_class=CLASSES,
                                   last_conv_after_pooling=config.last_conv_after_pooling,
                                   channels_layout=config.channels_layout)
