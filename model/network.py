@@ -7,18 +7,24 @@
 '''
 import torch
 import torch.nn as nn
-from blocks import ShuffleNetBlock, Activation, ShuffleNasBlock, SE, NasHybridSequential, ShuffleChannels, ShuffleChannelsConv, GlobalAvgPool2d
+from blocks import ShuffleNetBlock, Activation, ShuffleNasBlock, SE, NasHybridSequential, ShuffleChannels, ShuffleChannelsConv, GlobalAvgPool2d, NasBatchNorm
 import random
 from sys import maxsize
 import numpy as np
+from thop import profile
+from thop import clever_format
+from torchsummary import summary
+
 
 class ShuffleNetV2_OneShot(nn.Module):
     def __init__(self, input_size=224, n_class=1000, architecture=None, channels_scales=None,
-                use_all_blocks=False, use_se=False, last_conv_after_pooling=False,
+                use_all_blocks=False, bn=nn.BatchNorm2d, use_se=False, last_conv_after_pooling=False,
                 shuffle_method=ShuffleChannels, stage_out_channels=None, candidate_scales=None):
         """
-        scale_cand_ids = [6, 5, 3, 5, 2, 6, 3, 4, 2, 5, 7, 5, 4, 6, 7, 4, 4, 5, 4, 3]
-        scale_candidate_list = [0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0]
+        scale_cand_ids = [6, 5, 3, 5, 2, 6, 3, 4,
+            2, 5, 7, 5, 4, 6, 7, 4, 4, 5, 4, 3]
+        scale_candidate_list = [0.2, 0.4, 0.6,
+            0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0]
         stage_repeats = [4, 4, 8, 4]
         len(scale_cand_ids) == sum(stage_repeats) == # feature blocks == 20
         """
@@ -27,7 +33,8 @@ class ShuffleNetV2_OneShot(nn.Module):
         assert input_size % 32 == 0
 
         self.stage_repeats = [4, 4, 8, 4]
-        self.stage_out_channels = [-1, 16, 64, 160, 320, 640, 1024] if stage_out_channels is None else stage_out_channels
+        self.stage_out_channels = [-1, 16, 64, 160, 320, 640,
+            1024] if stage_out_channels is None else stage_out_channels
         self.candidate_scales = [0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0] \
             if candidate_scales is None else candidate_scales
         self.use_all_blocks = use_all_blocks
@@ -40,15 +47,16 @@ class ShuffleNetV2_OneShot(nn.Module):
             fix_arch = True
             assert len(architecture) == len(channels_scales)
         else:
-            raise ValueError("architecture and scale_ids should be both None or not None.")
+            raise ValueError(
+                "architecture and scale_ids should be both None or not None.")
         self.fix_arch = fix_arch
-        assert len(self.stage_repeats) == len(self.stage_out_channels) - 3 
-        
+        assert len(self.stage_repeats) == len(self.stage_out_channels) - 3
+
         # building first layer
         input_channel = self.stage_out_channels[1]
         self.first_conv = nn.Sequential(
             nn.Conv2d(3, input_channel, 3, 2, 1, bias=False),
-            nn.BatchNorm2d(input_channel),
+            bn(input_channel),
             Activation('hswish' if self.use_se else 'relu'),
         )
 
@@ -57,7 +65,7 @@ class ShuffleNetV2_OneShot(nn.Module):
         for idxstage in range(len(self.stage_repeats)):
             numrepeat = self.stage_repeats[idxstage]
             output_channel = self.stage_out_channels[idxstage+2]
-            
+
             if self.use_se:
                 act_name = 'hswish' if idxstage >= 1 else 'relu'
                 block_use_se = True if idxstage >= 2 else False
@@ -69,37 +77,42 @@ class ShuffleNetV2_OneShot(nn.Module):
                 if i == 0:
                     inp, outp, stride = input_channel, output_channel, 2
                 else:
-                    inp, outp, stride = input_channel, output_channel, 1
+                    inp, outp, stride = input_channel // 2, output_channel, 1
 
                 if fix_arch:
                     blockIndex = architecture[archIndex]
                     base_mid_channels = outp // 2
-                    mid_channels = make_divisible(int( base_mid_channels * channels_scales[archIndex]))
+                    mid_channels = make_divisible(
+                        int(base_mid_channels * channels_scales[archIndex]))
                     archIndex += 1
                     if blockIndex == 0:
-                        #print('Shuffle3x3')
-                        self.features.append(ShuffleNetBlock(inp, outp, mid_channels=mid_channels, ksize=3, stride=stride, block_mode='ShuffleNetV2', use_se=block_use_se, act_name=act_name, shuffle_method=shuffle_method))
+                        # print('Shuffle3x3')
+                        self.features.append(ShuffleNetBlock(inp, outp, mid_channels=mid_channels, bn=bn, ksize=3, stride=stride,
+                                             block_mode='ShuffleNetV2', use_se=block_use_se, act_name=act_name, shuffle_method=shuffle_method))
                     elif blockIndex == 1:
-                        #print('Shuffle5x5')
-                        self.features.append(ShuffleNetBlock(inp, outp, mid_channels=mid_channels, ksize=5, stride=stride, block_mode='ShuffleNetV2', use_se=block_use_se, act_name=act_name, shuffle_method=shuffle_method))
+                        # print('Shuffle5x5')
+                        self.features.append(ShuffleNetBlock(inp, outp, mid_channels=mid_channels, bn=bn, ksize=5, stride=stride,
+                                             block_mode='ShuffleNetV2', use_se=block_use_se, act_name=act_name, shuffle_method=shuffle_method))
                     elif blockIndex == 2:
-                        #print('Shuffle7x7')
-                        self.features.append(ShuffleNetBlock(inp, outp, mid_channels=mid_channels, ksize=7, stride=stride, block_mode='ShuffleNetV2', use_se=block_use_se, act_name=act_name, shuffle_method=shuffle_method))
+                        # print('Shuffle7x7')
+                        self.features.append(ShuffleNetBlock(inp, outp, mid_channels=mid_channels, bn=bn, ksize=7, stride=stride,
+                                             block_mode='ShuffleNetV2', use_se=block_use_se, act_name=act_name, shuffle_method=shuffle_method))
                     elif blockIndex == 3:
-                        #print('Xception')
-                        self.features.append(ShuffleNetBlock(inp, outp, mid_channels=mid_channels, ksize=3 ,stride=stride, block_mode='ShuffleXception', use_se=block_use_se, act_name=act_name,shuffle_method=shuffle_method))
+                        # print('Xception')
+                        self.features.append(ShuffleNetBlock(inp, outp, mid_channels=mid_channels, bn=bn, ksize=3, stride=stride,
+                                             block_mode='ShuffleXception', use_se=block_use_se, act_name=act_name, shuffle_method=shuffle_method))
                     else:
                         raise NotImplementedError
-                   
+
                 else:
                     archIndex += 1
-                    self.features.append(ShuffleNasBlock(input_channel, output_channel, stride=stride,
+                    self.features.append(ShuffleNasBlock(input_channel, output_channel, stride=stride, bn=bn,
                                                               max_channel_scale=self.candidate_scales[-1],
                                                               use_all_blocks=self.use_all_blocks,
                                                               use_se=block_use_se, act_name=act_name))
                 # update input_channel for next block
                 input_channel = output_channel
-        
+
         if fix_arch:
             self.features = nn.Sequential(*self.features)
         else:
@@ -107,50 +120,160 @@ class ShuffleNetV2_OneShot(nn.Module):
 
         if self.last_conv_after_pooling:
             self.conv_last = nn.Sequential(
-                #GlobalAvgPool2d(),
+                # GlobalAvgPool2d(),
                 nn.AdaptiveAvgPool2d(1),
-                nn.Conv2d(input_channel, self.stage_out_channels[-1], 1, 1, 0, bias=False),
-                #nn.BatchNorm2d(self.stage_out_channels[-1]),
+                nn.Conv2d(input_channel,
+                          self.stage_out_channels[-1], 1, 1, 0, bias=False),
+                # nn.BatchNorm2d(self.stage_out_channels[-1]),
                 Activation('hswish' if self.use_se else 'relu'),
             )
         else:
             if self.use_se:
                 # ShuffleNetV2+ approach
                 self.conv_last = nn.Sequential(
-                    nn.Conv2d(input_channel, make_divisible(self.stage_out_channels[-1] * 0.75), 1, 1, 0, bias=False),
-                    nn.BatchNorm2d(make_divisible(self.stage_out_channels[-1] * 0.75)),
+                    nn.Conv2d(input_channel, make_divisible(
+                        self.stage_out_channels[-1] * 0.75), 1, 1, 0, bias=False),
+                    bn(make_divisible(self.stage_out_channels[-1] * 0.75)),
                     nn.AdaptiveAvgPool2d(1),
                     SE(make_divisible(self.stage_out_channels[-1] * 0.75)),
-                    nn.Conv2d(make_divisible(self.stage_out_channels[-1] * 0.75),self.stage_out_channels[-1], 1, 1, 0, bias=False),
+                    nn.Conv2d(make_divisible(
+                        self.stage_out_channels[-1] * 0.75), self.stage_out_channels[-1], 1, 1, 0, bias=False),
                     Activation('hswish' if self.use_se else 'relu'),
                 )
             else:
                 # Origin Oneshot NAS approach
                 self.conv_last = nn.Sequential(
-                   nn.Conv2d(input_channel, self.stage_out_channels[-1], 1, 1, 0, bias=False),
-                   nn.BatchNorm2d(self.stage_out_channels[-1]),
+                   nn.Conv2d(input_channel,
+                             self.stage_out_channels[-1], 1, 1, 0, bias=False),
+                   bn(self.stage_out_channels[-1]),
                    Activation('hswish' if self.use_se else 'relu'),
-                   nn.AdaptiveAvgPool2d(1), 
+                   nn.AvgPool2d(7)
+                   # nn.AdaptiveAvgPool2d(1),
                 )
-        #self.globalpool = nn.AvgPool2d(7)
+        # self.globalpool = nn.AvgPool2d(7)
         self.dropout = nn.Dropout(0.2 if self.use_se else 0.1)
         self.classifier = nn.Sequential(
-            #nn.Conv2d(self.stage_out_channels[-1], n_class, 1,1,0,bias=False))
+            # nn.Conv2d(self.stage_out_channels[-1], n_class, 1,1,0,bias=False))
             nn.Linear(self.stage_out_channels[-1], n_class, bias=False),
             Activation('hswish' if self.use_se else 'relu'),)
-            #nn.Flatten())
+            # nn.Flatten())
         self._initialize_weights()
 
-    def random_block_choices(self, num_of_block_choices=4, select_predefined_block=False, dtype='float32'):
+    # add flops constraint
+    def random_block_choices(self, num_of_block_choices=4, select_predefined_block=False, timeout=1, full_channel_mask=None, flops_constraint=False):
         if select_predefined_block:
-            block_choices = [0, 0, 3, 1, 1, 1, 0, 0, 2, 0, 2, 1, 1, 0, 2, 0, 2, 1, 3, 2]
+            block_choices = [0, 0, 3, 1, 1, 1, 0, 0,
+                2, 0, 2, 1, 1, 0, 2, 0, 2, 1, 3, 2]
         else:
             block_number = sum(self.stage_repeats)
-            block_choices = []
-            for i in range(block_number):
-                block_choices.append(random.randint(0, num_of_block_choices - 1))
-        return torch.FloatTensor(block_choices)
-     
+            if flops_constraint:
+                # flosp constraint
+                flops_l, flops_r, flops_step = 290, 360, 10
+                bins = [[i, i+flops_step]
+                    for i in range(flops_l, flops_r, flops_step)]
+                idx = np.random.randint(len(bins))
+                l, r = bins[idx]
+                for i in range(timeout):
+                    block_choices = []
+                    for i in range(block_number):
+                        block_choices.append(random.randint(
+                            0, num_of_block_choices - 1))
+                    if l*1e6 <= self.get_cand_flops(block_choices=block_choices, full_channel_mask=full_channel_mask) <= r*1e6:
+                        return torch.Tensor(block_choices)
+            else:
+                block_choices = []
+                for i in range(block_number):
+                   block_choices.append(random.randint(
+                       0, num_of_block_choices - 1))
+        return torch.Tensor(block_choices) 
+        # return block_choices  # if use tensor will split in dataparallel
+
+    def get_cand_flops(self, input_shape=(1, 3, 224, 224), block_choices=None, full_channel_mask=None):
+        
+        list_conv = []
+        def conv_hook(self, input, output):
+            batch_size, input_channels, input_height, input_width = input[0].size(
+            )
+            output_channels, output_height, output_width = output[0].size()
+
+            assert self.in_channels % self.groups == 0
+
+            kernel_ops = self.kernel_size[0] * self.kernel_size[
+                1] * (self.in_channels // self.groups)
+            params = output_channels * kernel_ops
+            flops = batch_size * params * output_height * output_width
+
+            list_conv.append(flops)
+
+        list_linear = []
+        def linear_hook(self, input, output):
+            batch_size = input[0].size(0) if input[0].dim() == 2 else 1
+
+            weight_ops = self.weight.nelement()
+
+            flops = batch_size * weight_ops
+            list_linear.append(flops)
+
+        def foo(model, block_choices):
+            first_conv = model.first_conv
+            for net in first_conv:
+                if isinstance(net, torch.nn.Conv2d):
+                    net.register_forward_hook(conv_hook)
+            
+            features = model.features
+            for i,net in enumerate(features.blocks):
+                block_choice = block_choices[i]
+                #block = net.block_sn_3x3
+                if block_choice == 0:
+                    block = net.block_sn_3x3
+                elif block_choice == 1:
+                    block = net.block_sn_5x5
+                elif block_choice == 2:
+                    block = net.block_sn_7x7
+                elif block_choice == 3:
+                    block = net.block_sx_3x3
+                
+                branch_main = block.branch_main
+                if block.stride == 2:
+                    branch_proj = block.branch_proj
+                    for branch in branch_proj:
+                        if isinstance(branch, torch.nn.Conv2d):
+                            branch.register_forward_hook(conv_hook)
+                        if isinstance(branch, torch.nn.Linear):
+                            branch.register_forward_hook(linear_hook)
+                for branch in branch_main.blocks:
+                    if isinstance(branch, torch.nn.Conv2d):
+                        branch.register_forward_hook(conv_hook)
+                    if isinstance(branch, torch.nn.Linear):
+                        branch.register_forward_hook(linear_hook)
+                    if isinstance(branch, SE):
+                        for se in branch.channel_attention:
+                            if isinstance(se, torch.nn.Conv2d):
+                                se.register_forward_hook(conv_hook)
+                            if isinstance(se, torch.nn.Linear):
+                                se.register_forward_hook(linear_hook)
+            
+            conv_last = model.conv_last
+            for net in conv_last:
+                if isinstance(net, torch.nn.Conv2d):
+                    net.register_forward_hook(conv_hook)
+            
+            classifier = model.classifier
+            for net in classifier:
+                if isinstance(net, torch.nn.Linear):
+                    net.register_forward_hook(linear_hook)
+            return
+        
+
+        model = self
+        input = torch.randn(1,3,224,224)
+        foo(model, block_choices)
+        out = model(input, torch.Tensor(block_choices), full_channel_mask)
+        
+        total_flops = sum(sum(i) for i in [list_conv, list_linear])
+        print(total_flops / 1e6, 'M')
+        return total_flops
+
     def random_channel_mask(self, select_all_channels=False, mode='sparse', epoch_after_cs=maxsize,
                             ignore_first_two_cs=False):
         """
@@ -225,6 +348,7 @@ class ShuffleNetV2_OneShot(nn.Module):
                         local_mask[j] = 1
                 channel_mask.append(local_mask)
         return torch.FloatTensor(channel_mask), channel_choices
+        #return channel_mask, channel_choices #for dataparallel
 
     def forward(self, x, full_arch, full_scale_mask):
         x = self.first_conv(x)
@@ -233,7 +357,7 @@ class ShuffleNetV2_OneShot(nn.Module):
         else:
             x = self.features(x, full_arch, full_scale_mask)
         x = self.conv_last(x)
-        #x = self.globalpool(x)
+        # x = self.globalpool(x)
         
         x = self.dropout(x)
         x = x.contiguous().view(-1, self.stage_out_channels[-1])
@@ -249,7 +373,7 @@ class ShuffleNetV2_OneShot(nn.Module):
                     nn.init.normal_(m.weight, 0, 1.0 / m.weight.shape[1])
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.BatchNorm2d):
+            elif isinstance(m, NasBatchNorm):
                 nn.init.constant_(m.weight, 1)
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0.0001)
@@ -263,6 +387,9 @@ class ShuffleNetV2_OneShot(nn.Module):
                 nn.init.normal_(m.weight, 0, 0.01)
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
+    
+    def count_flops(self):
+        return None
 
 class ShuffleNetV2_OneShotFix(ShuffleNetV2_OneShot):
     # Unlike its parent class, fix-arch model does not have the control of "use_all_blocks" and "bn"(for NasBN).
@@ -276,7 +403,7 @@ class ShuffleNetV2_OneShotFix(ShuffleNetV2_OneShot):
         len(scale_cand_ids) == sum(stage_repeats) == # feature blocks == 20
         """
         super(ShuffleNetV2_OneShotFix, self).__init__(input_size=input_size, n_class=n_class,
-                                                   architecture=architecture, channels_scales=channels_scales,
+                                                   architecture=architecture, channels_scales=channels_scales, candidate_scales=candidate_scales,
                                                    use_se=use_se, last_conv_after_pooling=last_conv_after_pooling, shuffle_method=shuffle_method)
 
     def forward(self, x, *args, **kwargs):
@@ -284,7 +411,7 @@ class ShuffleNetV2_OneShotFix(ShuffleNetV2_OneShot):
         x = self.features(x)
         x = self.conv_last(x)
 
-        #x = self.globalpool(x)
+        # x = self.globalpool(x)
         
         x = self.dropout(x)
         x = x.contiguous().view(-1, self.stage_out_channels[-1])
@@ -307,7 +434,7 @@ def get_shufflenas_oneshot(architecture=None, scale_ids=None, use_all_blocks=Fal
 
     if architecture is None and scale_ids is None:
         # Nothing about architecture is specified, do random block selection and channel selection.
-        net = ShuffleNetV2_OneShot(n_class=n_class, use_all_blocks=use_all_blocks,
+        net = ShuffleNetV2_OneShot(n_class=n_class, use_all_blocks=use_all_blocks,bn = NasBatchNorm,
                                 use_se=use_se, last_conv_after_pooling=last_conv_after_pooling,
                                 stage_out_channels=stage_out_channels, candidate_scales=candidate_scales)
     elif architecture is not None and scale_ids is not None:
@@ -331,6 +458,13 @@ def get_shufflenas_oneshot(architecture=None, scale_ids=None, use_all_blocks=Fal
 def make_divisible(x, divisible_by=8):
     return int(np.ceil(x * 1. / divisible_by) * divisible_by)
 
+def get_flops(model):
+    input = torch.randn(1,3,224,224)
+    # flops, params = profile(model, input=(input, ), custom_ops={model: count_flops})
+    flops, params = profile(model, inputs=(input, ))
+    flops, params = clever_format([flops, params], "%.3f")
+    print('flops: ', flops, 'params: ', params)
+
 FIX_ARCH = False 
 LAST_CONV_AFTER_POOLING = True
 USE_SE = True
@@ -338,7 +472,7 @@ SHUFFLE_BY_CONV = False
 CHANNELS_LAYOUT = 'OneShot'
 
 def main():
-    #from calculate_flops import get_flops
+    # from calculate_flops import get_flops
 
     if FIX_ARCH:
         architecture = [0, 0, 3, 1, 1, 1, 0, 0, 2, 0, 2, 1, 1, 0, 2, 0, 2, 1, 3, 2]
@@ -351,12 +485,17 @@ def main():
     """ Test customized initialization """
     net._initialize_weights()
     print(np.sum(np.prod(v.size()) for name, v in net.named_parameters() if "auxiliary" not in name)/1e6) 
-    test_data = torch.rand(5, 3, 224, 224)
-    block_choices = net.random_block_choices(select_predefined_block=False)
+    test_data = torch.rand(1, 3, 224, 224)
+    ### Test the blocks constriant of flosp ###
     full_channel_mask, _ = net.random_channel_mask(select_all_channels=False)
-    test_outputs = net(test_data, block_choices, full_channel_mask)
+    block_choices = net.random_block_choices(select_predefined_block=False, full_channel_mask=full_channel_mask, flops_constraint=True)
+
+    a = torch.zeros((20, 1024))
+    test_outputs = net(test_data, block_choices, a)
+    #test_outputs = net(test_data, block_choices, full_channel_mask)
+    print(test_outputs.shape)
     #test_outputs = net(test_data)
-    print(test_outputs.size())
+    # print(summary(net, [(3,224,224), (10,1),(10,1)]))
 
     """ Test ShuffleNasOneShot """
     for epoch in range(1):
@@ -364,12 +503,13 @@ def main():
             test_outputs = net(test_data)
         else:
             block_choices = net.random_block_choices(select_predefined_block=False)
-            full_channel_mask, _ = net.random_channel_mask(select_all_channels=False)
+            full_channel_mask, channel_choices = net.random_channel_mask(
+                select_all_channels=False)
             test_outputs = net(test_data, block_choices, full_channel_mask)
             print(test_outputs.size())
         
     """ Test generating random channels """
-    epoch_start_cs = 30
+    epoch_start_cs = 60
     use_all_channels = True if epoch_start_cs != -1 else False
 
     for epoch in range(120):
@@ -381,6 +521,27 @@ def main():
                                                                             ignore_first_two_cs=True)
             print("Epoch {}: {}".format(epoch, channel_choices))
 
+    # TODO: remove debug code
+    stage_repeats = net.stage_repeats
+    stage_out_channels = net.stage_out_channels
+    candidate_scales = net.candidate_scales
+    channel_scales = []
+    for c in range(len(channel_choices)):
+        # scale_ids = [6, 5, 3, 5, 2, 6, 3, 4, 2, 5, 7, 5, 4, 6, 7, 4, 4, 5, 4, 3]
+        channel_scales.append(
+            candidate_scales[channel_choices[c]])
+    channels = [stage_out_channels[0]] * stage_repeats[0] + \
+                [stage_out_channels[1]] * stage_repeats[1] + \
+                [stage_out_channels[2]] * stage_repeats[2] + \
+                [stage_out_channels[3]] * stage_repeats[3]
+    channels = [make_divisible(channel / 2 * channel_scales[j]) for (j, channel)
+                in enumerate(channels)]
+    print("Train batch channel choices: {}".format(
+        channel_choices))
+    print("Train batch channels: {}".format(channels))
+    # TODO: end of debug code
+
+    # get_flops(net)
 
 if __name__ == '__main__':
     main()

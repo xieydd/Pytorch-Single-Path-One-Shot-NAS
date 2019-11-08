@@ -4,6 +4,23 @@ Single Path One-Shot NAS Pytorch implementation, include Supernet training and s
 Thanks for the great work of [MXNet-Single-Path-One-Shot-NAS](https://github.com/CanyonWind/MXNet-Single-Path-One-Shot-NAS), i basiclly follow it.
 
 
+| Model                                 | Official    | MXNet repo   | this repo
+| :------------------------------------ | :------     | :------      | :------
+| Subnet Training                       | √           | √            | √ 
+| Block Selection                       | ×           | √            | √
+| Channel Selection                     | ×           | √            | √
+| Supernet Training                     | ×           | √            | × 
+| FLOPs & Parameters Counting Tool      | ×           | √            | √
+| BN Statistics Update                  | ×           | √            | √
+| Random Search                         | ×           | √            | √
+| Genetic Search                        | ×           | √            | √
+| SE                                    | -           | √            | √
+| Efficient Last Conv Block             | -           | √            | ×
+| Op to Op Profiling Tool               | -           | √            | ×
+| Merge BN                              | -           | √            | ×
+| Int8 Quantization                     | -           | √            | ×
+
+
 ### Citation
 If you use these models in your research, please cite:
 ```

@@ -73,6 +73,38 @@ def save(model, model_path):
   torch.save(model.state_dict(), model_path)
 
 
+def save_checkpoint_spos(state, iters, path,is_best=False,tag=''):
+    model_path = path + '/models'
+    if not os.path.exists(model_path):
+        os.makedirs(model_path)
+    filename = os.path.join(
+        model_path + '/{}checkpoint-{:06}.pth.tar'.format(tag, iters))
+    torch.save(state, filename)
+    if is_best:
+        latestfilename = os.path.join(
+            model_path + '/{}best.pth.tar'.format(tag))
+        torch.save(state, latestfilename)
+
+def load_checkpoint_spos(model, path):
+    checkpoint = torch.load(path)
+    model.load_state_dict(checkpoint['state_dict'], strict=True)
+    w_optimizer = checkpoint['w_optimizer']
+    print('load from check[oint')
+    return w_optimizer
+
+
+def get_lastest_model(path):
+    model_path = path + '/models/'
+    if not os.path.exists(model_path):
+        os.mkdir(model_path)
+    model_list = os.listdir(model_path)
+    if model_list == []:
+        return None, 0
+    model_list.sort()
+    lastest_model = model_list[-1]
+    iters = re.findall(r'\d+', lastest_model)
+    return model_path + lastest_model, int(iters[0])
+
 def load(model, model_path):
   model.load_state_dict(torch.load(model_path))
 
@@ -466,6 +498,19 @@ class Schedule():
         self.update_lr(lr)
         return lr
 
+    """
+    warmup_epoch: warmup epochs when use target lr schedule 
+    epoch: current epoch
+    iters_per_epoch: every epoch update times
+    step: step of dataloader
+    """
+
+    def update_schedule_linear_target(self, warm_epoch,epoch,target_lr, iters_per_epoch, base_lr=0):
+        lr_step = (target_lr * (epoch+1)) / (warm_epoch * iters_per_epoch)
+        lr = base_lr + lr_step
+        #self.update_lr(lr)
+        return lr
+    
     def get_schedule_cosine(self, eta_min, max_epochs):
         return torch.optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer, float(max_epochs), eta_min=eta_min)
